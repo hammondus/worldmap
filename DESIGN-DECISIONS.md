@@ -149,6 +149,20 @@ would force each of them to edit a setting on every rebuild, so a rebuild reuses
 the name, and `immutable` would tell a browser it never has to ask again. The
 `ETag` carries the change instead.
 
+### The archive directory is excluded from the build context
+
+`.dockerignore` exists for one line: `data/`. Docker does not read
+`.gitignore`, and the runtime bind mount has no bearing on the build, so
+`COPY . .` sent the whole 8.5 GB archive directory to the daemon on every
+build. The context is 658 bytes with the exclusion.
+
+The rest of the file is small: build output, `go.work` — kept out
+deliberately, so a container build resolves nitrokit from the module proxy
+exactly as the deploy host does — and `.git`. Documentation is not excluded,
+even though it is not needed to compile: the saving is 30 KB, and a future
+`go:embed` of a Markdown file would fail in a way that takes a while to
+explain.
+
 ### Archives are a bind mount, not a named volume
 
 The plan says archives are a volume and never part of the image. A named Docker

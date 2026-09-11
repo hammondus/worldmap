@@ -1,0 +1,19 @@
+# Docker does not read .gitignore, and the build context is not the
+# runtime mount. Without this, `COPY . .` sends the archive directory to
+# the daemon: 8.5 GB of basemap per build, for a binary that reads the
+# archives from a bind mount at runtime and never from the image.
+data/
+
+# Build output. The image compiles its own binary from source.
+worldmap
+dist/
+
+# Local module resolution. Deliberately outside the build context, so a
+# container build resolves nitrokit from the module proxy exactly as the
+# deploy host does.
+go.work
+go.work.sum
+
+# Never needed to build, and .git grows without bound.
+.git/
+.env
