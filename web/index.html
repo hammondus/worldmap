@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>worldmap</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<h1>worldmap</h1>
+
+<p>Basemap archives, served as static bytes over HTTP <code>Range</code> with
+permissive cross-origin headers. Point a <a
+href="https://github.com/protomaps/PMTiles">PMTiles</a> client at one of the
+URLs below.</p>
+
+{{if .Archives}}
+<table>
+<thead><tr><th>Archive</th><th>Size</th><th>Built</th></tr></thead>
+<tbody>
+{{range .Archives}}
+<tr>
+  <td><a href="/{{.Name}}">{{.Name}}</a></td>
+  <td class="num">{{.Human}}</td>
+  <td>{{.Modified.UTC.Format "2006-01-02"}}</td>
+</tr>
+{{end}}
+</tbody>
+</table>
+
+<h2>Using an archive</h2>
+<p>In a MapLibre style, the source URL is the archive URL with a
+<code>pmtiles://</code> prefix:</p>
+<pre>pmtiles://{{$.Origin}}/{{(index .Archives 0).Name}}</pre>
+
+<h2>Extracting a region</h2>
+<p>The <code>pmtiles</code> CLI reads a remote archive over <code>Range</code>
+and transfers only the bytes it needs, so a regional subset costs no
+server-side work:</p>
+<pre>pmtiles extract {{$.Origin}}/{{(index .Archives 0).Name}} region.pmtiles \
+  --bbox=144.5,-38.5,145.6,-37.4</pre>
+{{else}}
+<p class="empty">No archives are published yet.</p>
+{{end}}
+
+<footer>
+<p>Map data from <a href="https://openstreetmap.org/copyright">OpenStreetMap</a>
+contributors. Tiles built with <a href="https://protomaps.com">Protomaps</a>.</p>
+</footer>
+</body>
+</html>

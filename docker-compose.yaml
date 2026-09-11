@@ -1,0 +1,39 @@
+# worldmap behind Nginx Proxy Manager, which terminates TLS and proxies to
+# worldmap:8080 by name on the shared `blobbyboo` network. No published
+# ports: the proxy is the only way in.
+#
+#   make deploy        # git pull, then docker compose up -d --build
+#
+# Archives are a bind mount rather than a named volume. They are measured
+# in gigabytes and arrive by scp, so a directory you can write to directly
+# beats a volume you have to copy through a throwaway container:
+#
+#   scp world-z11.pmtiles craigus.hammond.zone:/srv/worldmap/data/
+#
+# Set WORLDMAP_DATA in a .env beside this file when the archives live
+# somewhere other than ./data.
+#
+# In Nginx Proxy Manager, leave caching off for this host. A proxy cache
+# can collapse a Range request into a full-body fetch, which for an 8 GB
+# archive means the proxy downloads the whole file to answer a 16-byte
+# read. Verify with `make check-cors URL=https://worldmap.hammond.zone/...`
+# through the proxy, not only against the container.
+
+name: worldmap
+
+services:
+  worldmap:
+    build: .
+    image: worldmap:latest
+    container_name: worldmap
+    restart: unless-stopped
+    networks:
+      - blobbyboo
+    volumes:
+      # Read-only: the server never writes an archive, and a typo in a
+      # path should not be able to touch one.
+      - "${WORLDMAP_DATA:-./data}:/data:ro"
+
+networks:
+  blobbyboo:
+    external: true

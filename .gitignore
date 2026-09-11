@@ -1,0 +1,13 @@
+# Build output
+/worldmap
+/dist/
+
+# Archives. Gigabytes of generated basemap; rebuild with `make tiles`.
+/data/
+
+# Local module resolution, per ~/.claude/CLAUDE.md: never a go.mod replace.
+/go.work
+/go.work.sum
+
+# Deploy-host settings
+/.env
