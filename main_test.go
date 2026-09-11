@@ -301,3 +301,21 @@ func TestProxyTrust(t *testing.T) {
 		t.Error("proxyTrust accepted a malformed CIDR list")
 	}
 }
+
+// TestArchiveRejectsBareOptions covers the request the CORS middleware
+// passes through: an OPTIONS without Access-Control-Request-Method is an
+// ordinary request, and answering it with gigabytes would be wrong.
+func TestArchiveRejectsBareOptions(t *testing.T) {
+	_, h := testServer(t, 0, 0)
+	res := do(t, h, "OPTIONS", "/world-z8.pmtiles", nil)
+
+	if res.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", res.StatusCode)
+	}
+	if got := res.Header.Get("Allow"); got != "GET, HEAD, OPTIONS" {
+		t.Errorf("Allow = %q, want the methods the route implements", got)
+	}
+	if n, _ := io.Copy(io.Discard, res.Body); n > 64 {
+		t.Errorf("wrote %d bytes to a bare OPTIONS, want only the error text", n)
+	}
+}

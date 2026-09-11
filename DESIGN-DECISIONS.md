@@ -84,7 +84,7 @@ everyone. `make run` passes `-trusted-proxies=none`, because nothing stands in
 front of the binary locally and believing the header from a direct caller would
 let anyone pick which bucket to spend.
 
-### The server sets its own ETag
+### Cross-origin serving and the ETag come from nitrokit
 
 The plan says `http.ServeFile` sets an `ETag`. It does not. `ServeContent` and
 `ServeFile` set `Last-Modified` and answer `Range`, `If-Range`, and
@@ -92,10 +92,27 @@ The plan says `http.ServeFile` sets an `ETag`. It does not. `ServeContent` and
 revalidating after `max-age` has only a timestamp, and pmtiles.js has nothing
 to drive its `EtagMismatch` path when an archive changes mid-session.
 
-`etag` builds a strong validator from the file size and modification time.
-An extract writes a new file, so the pair changes whenever the bytes do.
-Hashing gigabytes at startup to do better would cost minutes of startup time
-for no gain.
+Both halves of this were written locally first and then moved into nitrokit
+v0.4.0, because the workspace already had other copies of each:
+
+- `nitrokit.ServeFileRange` sets `FileETag` — a strong validator built from
+  file size and modification time — before calling `ServeContent`, which is
+  the ordering the precondition check depends on. `aircraft-tracker` had
+  written the same validator, to the same format string, without either
+  project knowing about the other.
+- `nitrokit.CORS` describes the policy and answers the preflight.
+  `archiveCORS` is a wildcard origin with `Range` allowed and
+  `Content-Length, Content-Range, ETag, Accept-Ranges` exposed.
+
+A wildcard origin is correct here: the archive is public bytes with no
+credentials, and an allowlist would have to name every pilot's LAN address.
+The policy wraps the route rather than sitting inside the handler, so its
+headers ride every reply including a 404 and a 429 — a refusal a browser
+cannot read is reported to the page as an opaque network error.
+
+One consequence of the middleware form: an `OPTIONS` that carries no
+`Access-Control-Request-Method` is not a preflight, so it reaches the handler.
+The handler answers 405 rather than serving gigabytes.
 
 ### The archive is opened per request, through `os.Root`
 

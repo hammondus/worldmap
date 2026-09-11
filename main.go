@@ -202,12 +202,23 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /healthz", nitrokit.Healthz)
 	mux.Handle("GET /{$}", nitrokit.AccessLog(s.log, http.HandlerFunc(s.index)))
 	mux.HandleFunc("GET /style.css", s.style)
+
+	// The archive is public bytes with no credentials, so a wildcard
+	// origin is correct: an allowlist would have to name every pilot's
+	// LAN address. Exposing Content-Range is the part that cannot be
+	// skipped — without it pmtiles.js cannot read the response it just
+	// received, and the browser reports an opaque network error.
+	//
+	// The policy wraps both methods, so it answers the preflight that a
+	// cross-origin Range header triggers, and sets the headers on every
+	// reply the handler makes, including a 404 or a 429.
+	archive := archiveCORS.Handler(http.HandlerFunc(s.serveArchive))
 	// The archive routes deliberately carry no access log: one map
 	// session is hundreds of Range requests, and a line each buries
 	// everything else. The rollup in traffic.report carries the numbers
 	// that matter instead.
-	mux.HandleFunc("GET /{file}", s.serveArchive)
-	mux.HandleFunc("OPTIONS /{file}", archivePreflight)
+	mux.Handle("GET /{file}", archive)
+	mux.Handle("OPTIONS /{file}", archive)
 	return mux
 }
 
@@ -228,19 +239,29 @@ func (s *server) announce() {
 	}
 }
 
+// archiveCORS is the policy for the archive route.
+var archiveCORS = nitrokit.CORS{
+	Methods: []string{"GET", "HEAD"},
+	Headers: []string{"Range"},
+	Expose:  []string{"Content-Length", "Content-Range", "ETag", "Accept-Ranges"},
+}
+
 func (s *server) serveArchive(w http.ResponseWriter, r *http.Request) {
+	// An OPTIONS that is not a preflight reaches the handler, and serving
+	// gigabytes in answer to one would be a poor reading of the method.
+	if r.Method == http.MethodOptions {
+		w.Header().Set("Allow", "GET, HEAD, OPTIONS")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
 	name := r.PathValue("file")
 	if !strings.HasSuffix(name, archiveExt) {
 		http.NotFound(w, r)
 		return
 	}
 
-	// Set before any early return: a 404 or a 429 that a browser cannot
-	// read is reported to the page as an opaque network error.
 	h := w.Header()
-	h.Set("Access-Control-Allow-Origin", "*")
-	h.Set("Access-Control-Expose-Headers", "Content-Length, Content-Range, ETag, Accept-Ranges")
-
 	addr := s.trust.ClientIP(r).String()
 	if s.limit != nil {
 		if ok, retry := s.limit.Allow(addr); !ok {
@@ -268,22 +289,15 @@ func (s *server) serveArchive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer f.Close()
-	info, err := f.Stat()
-	if err != nil || info.IsDir() {
-		http.NotFound(w, r)
-		return
-	}
 
 	h.Set("Content-Type", "application/octet-stream")
 	h.Set("Cache-Control", "public, max-age="+strconv.Itoa(int(archiveMaxAge.Seconds())))
-	// http.ServeContent sets Last-Modified and answers Range, If-Range,
-	// and If-None-Match, but it generates no ETag. Without one a client
-	// revalidating after max-age has only a timestamp, and pmtiles.js has
-	// nothing to detect the archive changing mid-session with.
-	h.Set("Etag", etag(info))
 
 	counted := &countingWriter{ResponseWriter: w}
-	http.ServeContent(counted, r, name, info.ModTime(), f)
+	if err := nitrokit.ServeFileRange(counted, r, name, f); err != nil {
+		http.NotFound(w, r)
+		return
+	}
 
 	if s.limit != nil {
 		// Charged after the fact against what actually went out, so a
@@ -293,21 +307,6 @@ func (s *server) serveArchive(w http.ResponseWriter, r *http.Request) {
 		s.limit.Charge(addr, float64(counted.n))
 	}
 	s.traffic.served(name, counted.n)
-}
-
-// archivePreflight answers the CORS preflight that pmtiles.js triggers by
-// sending a Range header from another origin.
-func archivePreflight(w http.ResponseWriter, r *http.Request) {
-	if !strings.HasSuffix(r.PathValue("file"), archiveExt) {
-		http.NotFound(w, r)
-		return
-	}
-	h := w.Header()
-	h.Set("Access-Control-Allow-Origin", "*")
-	h.Set("Access-Control-Allow-Methods", "GET, HEAD")
-	h.Set("Access-Control-Allow-Headers", "Range")
-	h.Set("Access-Control-Max-Age", "86400")
-	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *server) index(w http.ResponseWriter, r *http.Request) {
@@ -386,14 +385,6 @@ func (s *server) archives() ([]archive, error) {
 	}
 	slices.SortFunc(list, func(a, b archive) int { return cmp.Compare(a.Name, b.Name) })
 	return list, nil
-}
-
-// etag is a strong validator built from the size and modification time,
-// which is what identifies a build of an archive: an extract writes a new
-// file, so the pair changes whenever the bytes do. Hashing gigabytes at
-// startup to do better is not worth the minutes it would cost.
-func etag(info fs.FileInfo) string {
-	return fmt.Sprintf(`"%x-%x"`, info.Size(), info.ModTime().UnixNano())
 }
 
 // countingWriter totals the body bytes a handler writes, which is both
