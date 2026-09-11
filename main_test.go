@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/hammondus/nitrokit"
 )
@@ -17,6 +16,11 @@ import (
 // archiveBody is stand-in content: the handler serves bytes and never
 // parses them, so a real PMTiles header would test nothing extra.
 const archiveBody = "0123456789abcdefghijklmnopqrstuvwxyz"
+
+// slowRate is a thousand seconds per byte. nitrokit.Limiter keeps its
+// clock unexported, so rather than injecting one, the rate-limit tests
+// refill so slowly that a test run cannot measurably move the balance.
+const slowRate = 0.001
 
 // testServer returns a server over a data directory holding one archive,
 // with its routes wired. rate of 0 disables the limiter.
@@ -36,15 +40,6 @@ func testServer(t *testing.T, rate, burst float64) (*server, http.Handler) {
 		t.Fatal(err)
 	}
 	return s, s.routes()
-}
-
-// freezeClock stops the limiter's clock, so a test measures what the
-// handler charged and not what the bucket refilled while it ran.
-func freezeClock(l *byteLimiter) {
-	now := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.now = func() time.Time { return now }
 }
 
 func do(t *testing.T, h http.Handler, method, target string, headers map[string]string) *http.Response {
@@ -192,8 +187,7 @@ func TestArchiveStaysInsideDataDirectory(t *testing.T) {
 func TestArchiveRateLimitChargesBytes(t *testing.T) {
 	// A burst of two whole archives, so the third request is refused and
 	// the refusal is driven by bytes rather than by a request count.
-	s, h := testServer(t, 1, 2*float64(len(archiveBody)))
-	freezeClock(s.limit)
+	_, h := testServer(t, slowRate, 2*float64(len(archiveBody)))
 
 	for i := range 2 {
 		if res := do(t, h, "GET", "/world-z8.pmtiles", nil); res.StatusCode != http.StatusOK {
@@ -221,8 +215,7 @@ func TestSmallRequestsDoNotSpendTheBudgetLikeRequestCounting(t *testing.T) {
 	// a limiter counting requests with a burst of two would have refused
 	// the third. This is the whole reason the limiter charges bytes: one
 	// map session is a burst of small Range requests.
-	s, h := testServer(t, 1, 2*float64(len(archiveBody)))
-	freezeClock(s.limit)
+	_, h := testServer(t, slowRate, 2*float64(len(archiveBody)))
 	for i := range 4 {
 		res := do(t, h, "GET", "/world-z8.pmtiles", map[string]string{"Range": "bytes=0-15"})
 		if res.StatusCode != http.StatusPartialContent {

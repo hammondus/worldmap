@@ -58,25 +58,17 @@ session through does nothing to bound a client pulling the whole 7.9 GB
 archive, which is the case worth bounding. Bytes are also the cost being
 protected.
 
-`byteLimiter` in `ratelimit.go` is therefore a token bucket whose token is a
-byte. `allow` admits a request on a positive balance; the handler charges the
-balance afterwards with what actually went out, measured by `countingWriter`.
-The bucket is allowed to go negative, so one oversized response overdraws the
-address and the next request waits, rather than a response being cut off
-partway through.
+The first implementation was a local token bucket whose token was a byte. It
+duplicated the shape of `nitrokit.Limiter` closely enough to be the exact
+problem that module exists to stop, so the primitive moved into nitrokit as
+`Limiter.Charge` (v0.4.0) and the local copy was deleted.
 
-Two consequences worth naming:
-
-- **Eviction cannot forgive debt.** A client that pulled a whole archive owes
-  far more than one burst. Evicting that key on a fixed idle timeout would let
-  it clear the debt by waiting out the timeout instead of waiting out the rate.
-  `sweep` therefore drops a bucket only when the bucket has refilled
-  completely, which costs about forty bytes of memory per address still in
-  debt.
-- **This duplicates the shape of `nitrokit.Limiter`.** `nitrokit.Limiter`
-  spends exactly one token per call and cannot express "this response cost
-  4 MB". If a second project needs a byte budget, the fix is an `AllowN` in
-  nitrokit, not a second copy of this file.
+The handler admits a request with `Allow`, serves it while `countingWriter`
+totals the body bytes, then calls `Charge` with the total. The bucket is
+allowed to go negative, so one oversized response overdraws the address and the
+next request waits, rather than a response being cut off partway through once
+its true cost is known. `Allow` spends one token as an admission toll, which
+against a 256 MiB burst is not worth avoiding.
 
 The defaults are 128 KiB/s sustained with a 256 MiB burst, both flags. A
 session costs a few megabytes, so the burst is roughly fifty sessions at full

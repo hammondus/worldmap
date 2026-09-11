@@ -159,7 +159,7 @@ type server struct {
 	dir     string
 	log     *slog.Logger
 	trust   *nitrokit.ProxyTrust
-	limit   *byteLimiter // nil when -rate is 0
+	limit   *nitrokit.Limiter // nil when -rate is 0
 	traffic *traffic
 	page    *template.Template
 	assets  fs.FS
@@ -183,7 +183,16 @@ func newServer(dir string, trust *nitrokit.ProxyTrust, rate, burst float64, log 
 		assets:  assets,
 	}
 	if rate > 0 {
-		s.limit = newByteLimiter(rate, burst)
+		// The token is a byte, not a request. One map session issues
+		// hundreds of small Range requests, so a requests-per-second
+		// ceiling loose enough to let a real session through does nothing
+		// to bound a client pulling a whole multi-gigabyte archive — and
+		// bytes are the cost being protected. Limiter.Charge exists for
+		// this: admit on Allow, then bill what actually went out.
+		if burst < 1 {
+			return nil, fmt.Errorf("-burst is %v; it must be at least 1 byte when -rate is set", burst)
+		}
+		s.limit = nitrokit.NewLimiter(rate, burst)
 	}
 	return s, nil
 }
@@ -234,7 +243,7 @@ func (s *server) serveArchive(w http.ResponseWriter, r *http.Request) {
 
 	addr := s.trust.ClientIP(r).String()
 	if s.limit != nil {
-		if ok, retry := s.limit.allow(addr); !ok {
+		if ok, retry := s.limit.Allow(addr); !ok {
 			s.traffic.denied(name)
 			h.Set("Retry-After", strconv.Itoa(max(1, int(math.Ceil(retry.Seconds())))))
 			http.Error(w, "egress budget exhausted for this address; retry later", http.StatusTooManyRequests)
@@ -281,7 +290,7 @@ func (s *server) serveArchive(w http.ResponseWriter, r *http.Request) {
 		// range the client aborted costs only what it took. The bucket is
 		// allowed to go negative: one oversized response overdraws the
 		// address rather than being refused halfway through.
-		s.limit.charge(addr, counted.n)
+		s.limit.Charge(addr, float64(counted.n))
 	}
 	s.traffic.served(name, counted.n)
 }

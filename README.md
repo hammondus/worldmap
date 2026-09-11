@@ -17,6 +17,12 @@ serving, `Range`, and the egress limit. The viewer that draws a flight map from
 a URL fragment is phase 2 and is not built yet. The index page lists what is
 published.
 
+The egress limit needs `Limiter.Charge`, which lands in nitrokit v0.4.0. Until
+that tag exists, the build resolves nitrokit through a `go.work` beside this
+file, and `docker compose build` fails because `go.work` is outside the build
+context. To build the container, tag nitrokit v0.4.0, run `go get
+github.com/hammondus/nitrokit@v0.4.0`, and delete `go.work`.
+
 ## Endpoints
 
 | Route | Purpose |
