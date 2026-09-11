@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -317,5 +318,80 @@ func TestArchiveRejectsBareOptions(t *testing.T) {
 	}
 	if n, _ := io.Copy(io.Discard, res.Body); n > 64 {
 		t.Errorf("wrote %d bytes to a bare OPTIONS, want only the error text", n)
+	}
+}
+
+// TestEgressCountsDistinctAddresses covers the operational question the
+// count exists for: is the per-address budget actually per address?
+func TestEgressCountsDistinctAddresses(t *testing.T) {
+	s, h := testServer(t, 0, 0)
+
+	for _, peer := range []string{"203.0.113.1:1", "203.0.113.1:2", "203.0.113.9:1"} {
+		r := httptest.NewRequest("GET", "/world-z8.pmtiles", nil)
+		r.RemoteAddr = peer
+		h.ServeHTTP(httptest.NewRecorder(), r)
+	}
+
+	s.traffic.mu.Lock()
+	defer s.traffic.mu.Unlock()
+	a := s.traffic.by["world-z8.pmtiles"]
+	if a.requests != 3 {
+		t.Fatalf("requests = %d, want 3", a.requests)
+	}
+	// Two addresses, three requests: the port is not part of the identity.
+	if got := len(a.addresses); got != 2 {
+		t.Errorf("addresses = %d, want 2", got)
+	}
+}
+
+// TestEgressAddressesFollowForwardedFor is the deployed case. Behind a
+// proxy that sets X-Forwarded-For, the count must follow the real callers;
+// if it tracked the peer, every client would share one egress budget.
+func TestEgressAddressesFollowForwardedFor(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "world-z8.pmtiles"), []byte(archiveBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	trust, err := proxyTrust("private")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := newServer(dir, trust, 0, 0, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := s.routes()
+
+	for _, client := range []string{"198.51.100.1", "198.51.100.2", "198.51.100.3"} {
+		r := httptest.NewRequest("GET", "/world-z8.pmtiles", nil)
+		r.RemoteAddr = "172.18.0.2:5000" // the proxy, on a container network
+		r.Header.Set("X-Forwarded-For", client)
+		h.ServeHTTP(httptest.NewRecorder(), r)
+	}
+
+	s.traffic.mu.Lock()
+	defer s.traffic.mu.Unlock()
+	if got := len(s.traffic.by["world-z8.pmtiles"].addresses); got != 3 {
+		t.Errorf("addresses = %d, want 3; the count is tracking the proxy, not the clients", got)
+	}
+}
+
+func TestEgressAddressSetIsBounded(t *testing.T) {
+	tr := newTraffic()
+	for i := range maxTrackedAddresses + 500 {
+		tr.served("a.pmtiles", fmt.Sprintf("198.51.100.%d", i), 1)
+	}
+
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	a := tr.by["a.pmtiles"]
+	if len(a.addresses) != maxTrackedAddresses {
+		t.Errorf("tracked %d addresses, want the cap of %d", len(a.addresses), maxTrackedAddresses)
+	}
+	if !a.capped {
+		t.Error("the rollup does not mark the count as capped, so a reader would read it as exact")
+	}
+	if a.requests != maxTrackedAddresses+500 {
+		t.Error("the cap dropped requests as well as addresses")
 	}
 }

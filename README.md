@@ -135,6 +135,22 @@ Expect `206 Partial Content`, a `Content-Range` header, and
 exposed, pmtiles.js cannot read the response it just received, and the browser
 reports an opaque network error.
 
+### Verifying the per-address egress budget
+
+The archive routes write no access log, so the egress rollup is where a
+deployment is checked:
+
+```
+msg=egress archive=world-z11.pmtiles requests=20 bytes=795080 denied=0 addresses=7
+```
+
+`addresses` counts distinct client addresses for the period. If it stays at 1
+while traffic arrives from more than one place, the proxy is not sending
+`X-Forwarded-For`, every request is being attributed to the proxy, and the
+`-rate` and `-burst` budgets apply to all clients together instead of to each
+one. To see the number sooner than the 15-minute default, run with
+`-report 30s`.
+
 ## Licences
 
 The server is this repository's code. The map data comes from

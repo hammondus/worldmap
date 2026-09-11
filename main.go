@@ -265,7 +265,7 @@ func (s *server) serveArchive(w http.ResponseWriter, r *http.Request) {
 	addr := s.trust.ClientIP(r).String()
 	if s.limit != nil {
 		if ok, retry := s.limit.Allow(addr); !ok {
-			s.traffic.denied(name)
+			s.traffic.denied(name, addr)
 			h.Set("Retry-After", strconv.Itoa(max(1, int(math.Ceil(retry.Seconds())))))
 			http.Error(w, "egress budget exhausted for this address; retry later", http.StatusTooManyRequests)
 			return
@@ -306,7 +306,7 @@ func (s *server) serveArchive(w http.ResponseWriter, r *http.Request) {
 		// address rather than being refused halfway through.
 		s.limit.Charge(addr, float64(counted.n))
 	}
-	s.traffic.served(name, counted.n)
+	s.traffic.served(name, addr, counted.n)
 }
 
 func (s *server) index(w http.ResponseWriter, r *http.Request) {
@@ -413,32 +413,58 @@ type traffic struct {
 }
 
 type archiveTraffic struct {
-	requests int64
-	bytes    int64
-	denied   int64
+	requests  int64
+	bytes     int64
+	denied    int64
+	addresses map[string]struct{}
+	capped    bool
 }
+
+// maxTrackedAddresses bounds the address set for one reporting period. The
+// count answers a yes-or-no question — is the per-address budget actually
+// per address, or is every client landing in one bucket — so a few
+// thousand is far more resolution than the question needs, and the cap
+// stops a flood of forged addresses growing the map without bound.
+const maxTrackedAddresses = 4096
 
 func newTraffic() *traffic { return &traffic{by: map[string]*archiveTraffic{}} }
 
-func (t *traffic) served(name string, n int64) {
+func (t *traffic) served(name, addr string, n int64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	a := t.entry(name)
 	a.requests++
 	a.bytes += n
+	a.note(addr)
 }
 
-func (t *traffic) denied(name string) {
+func (t *traffic) denied(name, addr string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.entry(name).denied++
+	a := t.entry(name)
+	a.denied++
+	a.note(addr)
+}
+
+// note records that addr was seen. Only the size of the set is ever
+// reported, never a member: the operator needs to know how many addresses
+// the limiter is distinguishing, not who they were. Caller holds the mutex.
+func (a *archiveTraffic) note(addr string) {
+	if _, seen := a.addresses[addr]; seen {
+		return
+	}
+	if len(a.addresses) >= maxTrackedAddresses {
+		a.capped = true
+		return
+	}
+	a.addresses[addr] = struct{}{}
 }
 
 // entry returns the counter for name, creating it. Caller holds the mutex.
 func (t *traffic) entry(name string) *archiveTraffic {
 	a, ok := t.by[name]
 	if !ok {
-		a = new(archiveTraffic)
+		a = &archiveTraffic{addresses: map[string]struct{}{}}
 		t.by[name] = a
 	}
 	return a
@@ -446,12 +472,22 @@ func (t *traffic) entry(name string) *archiveTraffic {
 
 // report logs one line per archive that saw traffic since the last call,
 // then resets. Nothing is logged for an idle period.
+//
+// The address count is how a deployment checks that the per-address egress
+// budget is per address. Behind a proxy that does not set X-Forwarded-For,
+// every request is attributed to the proxy and the count stays at 1 while
+// real traffic arrives from many places — which would mean one shared
+// bucket for every client, rather than one each.
 func (t *traffic) report(log *slog.Logger) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for name, a := range t.by {
-		log.Info("egress", "archive", name, "requests", a.requests,
-			"bytes", a.bytes, "denied", a.denied)
+		attrs := []any{"archive", name, "requests", a.requests,
+			"bytes", a.bytes, "denied", a.denied, "addresses", len(a.addresses)}
+		if a.capped {
+			attrs = append(attrs, "addresses_capped", true)
+		}
+		log.Info("egress", attrs...)
 	}
 	clear(t.by)
 }

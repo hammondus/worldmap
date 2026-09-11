@@ -134,6 +134,21 @@ requests, bytes, and refusals per archive, and logs a rollup every 15 minutes
 and once at shutdown. That answers the question the plan actually asks — how
 much is leaving the host — without the volume.
 
+The rollup also carries a count of distinct client addresses, because dropping
+the access log dropped the only way to tell whether the per-address egress
+budget is per address. Behind a proxy that does not set `X-Forwarded-For`,
+every request is attributed to the proxy, and one shared bucket serves every
+client on the internet. That failure is silent: the limit still works, it just
+applies to the wrong thing. A count that stays at 1 while real traffic arrives
+from many places is the signal.
+
+It is a count and never a list. The operator needs to know how many addresses
+the limiter is distinguishing, not who they were, and a count carries no
+personal data into the logs. The set is capped at 4096 per reporting period,
+which is far more resolution than a yes-or-no question needs and stops a flood
+of forged addresses growing the map; a capped period logs
+`addresses_capped=true` so the number is not read as exact.
+
 ### `WriteTimeout` is zero, with `WriteBudget` in its place
 
 `nitrokit.NewServer` sets a 30-second `WriteTimeout`, which suits a page-serving
