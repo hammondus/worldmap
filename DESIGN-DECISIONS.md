@@ -74,6 +74,23 @@ The defaults are 128 KiB/s sustained with a 256 MiB burst, both flags. A
 session costs a few megabytes, so the burst is roughly fifty sessions at full
 speed before the rate starts to bite.
 
+### The index names the archives but does not link them
+
+A directory index normally links what it lists. This one must not.
+
+An archive is gigabytes, and a click on a link to one is a browser download:
+no `Range` header, so the handler serves the whole file, and the limiter
+charges every byte to the address that clicked. That address then gets a 429
+on the map for hours. The cost is worse behind a buffering proxy, which is
+every deployment: nginx keeps reading from upstream after the visitor cancels,
+up to `proxy_max_temp_file_size`. One cancelled click on 2026-09-13 reached
+the browser with 34 MB and cost 891 MB of charged egress.
+
+Nobody wants the file anyway. A PMTiles client consumes the URL, and the
+`pmtiles extract` recipe below the table is how a regional subset is taken —
+over `Range`, transferring only what the subset needs. So the table gives the
+name in code font and the page gives the URLs, and neither is clickable.
+
 ### `X-Forwarded-For` is trusted from private addresses by default
 
 Every deployment of this sits behind Nginx Proxy Manager on a container

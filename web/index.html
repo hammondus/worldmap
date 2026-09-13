@@ -20,7 +20,13 @@ URLs below.</p>
 <tbody>
 {{range .Archives}}
 <tr>
-  <td><a href="/{{.Name}}">{{.Name}}</a></td>
+{{/* The name is deliberately not a link. A click on one would start a
+plain full-archive download: gigabytes, no Range header, and — through a
+buffering proxy — charged to the visitor's egress budget even when they
+cancel it a second later, which locks that address out of the map for
+hours. Nobody needs the whole file; the URLs below are what a client
+consumes. */}}
+  <td><code>{{.Name}}</code></td>
   <td class="num">{{.Human}}</td>
   <td>{{.Modified.UTC.Format "2006-01-02"}}</td>
 </tr>

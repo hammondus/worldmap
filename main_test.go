@@ -233,11 +233,17 @@ func TestIndexListsArchives(t *testing.T) {
 		t.Fatalf("status = %d, want 200", res.StatusCode)
 	}
 	if got := res.Header.Get("Cache-Control"); !strings.Contains(got, "no-cache") {
-		t.Errorf("Cache-Control = %q, want no-cache: the page names the archives it links to", got)
+		t.Errorf("Cache-Control = %q, want no-cache: the page names the archives it serves", got)
 	}
 	body, _ := io.ReadAll(res.Body)
 	if !strings.Contains(string(body), "world-z8.pmtiles") {
 		t.Error("the archive is not listed on the index page")
+	}
+	// An archive name must never be a link. A click starts a
+	// full-archive download with no Range header, which costs gigabytes
+	// and spends the visitor's whole egress budget.
+	if strings.Contains(string(body), `href="/world-z8.pmtiles"`) {
+		t.Error("the index links the archive; a click would download the whole file")
 	}
 }
 
